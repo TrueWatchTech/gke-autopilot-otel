@@ -1,4 +1,4 @@
-# GKE Autopilot Cluster intergration Truewatch
+# GKE Autopilot Cluster integration Truewatch
 
 ## Architecture
 
