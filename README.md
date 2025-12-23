@@ -6,7 +6,7 @@ Please read [Architecture](./Architecture.md).
 
 ## How to build
 
-Please read [Build](./build.md).
+Please read [Build](./Build.md).
 
 ## Support
 
