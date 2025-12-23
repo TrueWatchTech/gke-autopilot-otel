@@ -98,7 +98,7 @@ dkconfig: [EXTRA_CONFIG_FILES]
   kubectl apply -f https://github.com/open-telemetry/opentelemetry-operator/releases/latest/download/opentelemetry-operator.yaml
 ```
 
-## Install Otel k8s Collector
+## Install Otel k8s collector
 
 ⚠️ Please remember to replace "<YOUR_DATAKIT_CLUSTER_DNS_WITH_PORT>" in otel-k8s-collector yaml file.
 
