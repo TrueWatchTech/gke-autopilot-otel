@@ -1,4 +1,4 @@
-# GKE Autopilot Cluster intergration Truewatch
+# GKE Autopilot Cluster integration Truewatch
 
 The system uses the Otel Collector to gather metrics, events, APM, and logs, then passes them through Datakit and Dataway to be visualized on the TrueWatch dashboard.
 
