@@ -54,6 +54,12 @@ spec:
 
 ```
 
+```bash
+helm install datakit ./datakit-download-folder \
+  -n datakit -f datakit-values.yaml \
+  --create-namespace
+```
+
 Adjust datakit values
 
 ```yaml
@@ -118,4 +124,97 @@ helm install kube-state-metrics prometheus-community/kube-state-metrics \
   --set resources.requests.memory=128Mi
 
 kubectl apply -f otel-kube-collector.yaml  
+```
+
+## Backend code inject
+
+Please refer to Opentelemtry [docs](https://opentelemetry.io/docs/languages/)
+
+⚠️ Otel Profiling needs eBPF Agent but it can't install on GKE Autopilot so far.
+
+## Backend Instrumentation
+
+Please refer to Opentelemtry [docs](https://opentelemetry.io/docs/platforms/kubernetes/operator/automatic/#installation)
+
+Heres is the example yaml
+
+```yaml
+apiVersion: opentelemetry.io/v1alpha1
+kind: Instrumentation
+metadata:
+  name: instrumentation
+spec:
+  exporter:
+    endpoint: http://localhost:4317
+    - tracecontext
+    - baggage
+    - b3
+  env:
+    - name: OTEL_EXPORTER_OTLP_PROTOCOL
+      value: "grpc"
+    - name: OTEL_SERVICE_NAME
+      value: "<YOUR_APP_NAME>"
+    - name: OTEL_TRACES_EXPORTER
+      value: "otlp"
+    - name: OTEL_METRICS_EXPORTER
+      value: "otlp"
+    - name: OTEL_LOGS_EXPORTER
+      value: "otlp"
+  java:
+    image: ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-java:latest
+  nodejs:
+    image: ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-nodejs:latest
+  python:
+    image: ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-python:latest
+---
+apiVersion: opentelemetry.io/v1alpha1
+kind: OpenTelemetryCollector
+metadata:
+  name: collector
+spec:
+  mode: sidecar
+  args: 
+    "feature-gates": "service.profilesSupport"
+  config: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+          http:
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 15
+      batch:
+        send_batch_size: 10000
+        timeout: 10s
+
+    exporters:
+      debug:
+        verbosity: basic
+      otlp:
+        endpoint: "<YOUR_DATAKIT_CLUSTER_DNS_WITH_PORT>" # Datakit
+        tls:
+          insecure: true
+        #compression: none
+
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [debug,otlp]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [debug,otlp]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [debug,otlp]
+        profiles:
+          receivers: [otlp]
+          processors: [memory_limiter]
+          exporters: [otlp]
 ```
