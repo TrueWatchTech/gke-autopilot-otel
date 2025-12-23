@@ -1,0 +1,222 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  namespace: opentelemetry-operator-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otel-collector-role
+rules:
+  - apiGroups: [""]
+    resources: ["events", "namespaces", "namespaces/status", "nodes", "nodes/spec", "pods", "pods/status", "replicationcontrollers", "replicationcontrollers/status", "resourcequotas", "services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["daemonsets", "deployments", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["extensions"]
+    resources: ["daemonsets", "deployments", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes/stats", "nodes/proxy"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otel-collector-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: otel-collector-role
+subjects:
+  - kind: ServiceAccount
+    name: otel-collector
+    namespace: opentelemetry-operator-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-agent-conf
+  namespace: opentelemetry-operator-system
+data:
+  otel-agent-config.yaml: |
+    receivers:
+      # 從 Kubelet API 抓取 CPU/Memory
+      kubeletstats:
+        collection_interval: 15s
+        auth_type: "serviceAccount"
+        endpoint: "${env:K8S_NODE_NAME}:10250"
+        insecure_skip_verify: true
+        metric_groups:
+          - node
+          - pod
+          - container
+
+    processors:
+      batch:
+      k8sattributes:
+        auth_type: "serviceAccount"
+        passthrough: false
+        filter:
+          node_from_env_var: K8S_NODE_NAME
+        extract:
+          metadata:
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.deployment.name
+            - k8s.namespace.name
+            - k8s.node.name
+        pod_association:
+          - sources:
+            - from: resource_attribute
+              name: k8s.pod.uid
+            - from: resource_attribute
+              name: k8s.pod.name
+            - from: connection
+
+    exporters:
+      otlp:
+        endpoint: "<YOUR_DATAKIT_CLUSTER_DNS_WITH_PORT>" 
+        tls:
+          insecure: true
+      debug:
+        verbosity: basic
+
+    service:
+      pipelines:
+        metrics:
+          receivers: [kubeletstats]
+          processors: [k8sattributes, batch]
+          exporters: [otlp]
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-agent
+  namespace: opentelemetry-operator-system
+  labels:
+    app: otel-agent
+spec:
+  selector:
+    matchLabels:
+      app: otel-agent
+  template:
+    metadata:
+      labels:
+        app: otel-agent
+    spec:
+      serviceAccountName: otel-collector
+      containers:
+      - name: otel-collector
+        image: otel/opentelemetry-collector-contrib:0.141.0
+        command: ["/otelcol-contrib"]
+        args: ["--config=/conf/otel-agent-config.yaml"]
+        env:
+          - name: K8S_NODE_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.nodeName
+          - name: K8S_POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+        volumeMounts:
+          - name: otel-agent-config-vol
+            mountPath: /conf
+      volumes:
+        - name: otel-agent-config-vol
+          configMap:
+            name: otel-agent-conf
+            items:
+              - key: otel-agent-config.yaml
+                path: otel-agent-config.yaml
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-cluster-conf
+  namespace: opentelemetry-operator-system
+data:
+  otel-cluster-config.yaml: |
+    receivers:
+      k8s_cluster:
+        collection_interval: 30s
+        auth_type: serviceAccount
+        node_conditions_to_report: [Ready, MemoryPressure]
+        allocatable_types_to_report: [cpu, memory]
+      k8s_events:
+          auth_type: serviceAccount
+
+    processors:
+      batch:
+      resource/metadata:
+        attributes:
+          - key: dkt_source
+            value: "kubernetes_events"
+            action: upsert
+          - key: env
+            value: "prod"
+            action: upsert
+        
+    exporters:
+      otlp:
+        endpoint: "<YOUR_DATAKIT_CLUSTER_DNS_WITH_PORT>"
+        tls:
+          insecure: true
+      debug:
+        verbosity: basic
+
+    service:
+      pipelines:
+        metrics:
+          receivers: [k8s_cluster]
+          processors: [batch]
+          exporters: [otlp]
+        logs:
+          receivers: [k8s_events]
+          processors: [resource/metadata, batch]
+          exporters: [otlp]
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-cluster-monitor
+  namespace: opentelemetry-operator-system
+  labels:
+    app: otel-cluster-monitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-cluster-monitor
+  template:
+    metadata:
+      labels:
+        app: otel-cluster-monitor
+    spec:
+      serviceAccountName: otel-collector
+      containers:
+      - name: otel-collector
+        image: otel/opentelemetry-collector-contrib:0.141.0
+        command: ["/otelcol-contrib"]
+        args: ["--config=/conf/otel-cluster-config.yaml"]
+        volumeMounts:
+          - name: otel-cluster-config-vol
+            mountPath: /conf
+      volumes:
+        - name: otel-cluster-config-vol
+          configMap:
+            name: otel-cluster-conf
+            items:
+              - key: otel-cluster-config.yaml
+                path: otel-cluster-config.yaml

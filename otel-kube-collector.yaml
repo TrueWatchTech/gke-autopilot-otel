@@ -1,0 +1,42 @@
+apiVersion: opentelemetry.io/v1alpha1
+kind: OpenTelemetryCollector
+metadata:
+  name: kube-collector
+spec:
+  mode: deployment
+  args: 
+    "feature-gates": "service.profilesSupport"
+  config: |
+    receivers:
+      prometheus:
+          config:
+            scrape_configs:
+              - job_name: 'kube-state-metrics'
+                scrape_interval: 15s
+                static_configs:
+                  - targets: ['<YOUR_KUBE_STATE_METRICS_CLUSTER_DNS_WITH_PORT>']
+                metric_relabel_configs:
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 15
+      batch:
+        send_batch_size: 10000
+        timeout: 10s
+
+    exporters:
+      debug:
+        verbosity: basic
+      otlp:
+        endpoint: "<YOUR_DATAKIT_CLUSTER_DNS_WITH_PORT>" # Datakit
+        tls:
+          insecure: true
+        #compression: none
+
+    service:
+      pipelines:
+        metrics:
+          receivers: [prometheus]
+          processors: [memory_limiter, batch]
+          exporters: [debug,otlp]
